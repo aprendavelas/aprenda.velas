@@ -3,80 +3,56 @@ const https = require('https');
 const FIREBASE_API_KEY = "AIzaSyCqb1gQwuMQLjoj1UAj37zBO3vOT_t3C2s";
 const KIWIFY_TOKEN = "nyxjc75y6zy";
 
-async function createFirebaseUser(email) {
+function post(hostname, path, data) {
   return new Promise((resolve, reject) => {
-    const data = JSON.stringify({
-      email: email,
-      password: Math.random().toString(36).slice(-12) + "A1!",
-      returnSecureToken: false
-    });
-    const options = {
-      hostname: 'identitytoolkit.googleapis.com',
-      path: `/v1/accounts:signUp?key=${FIREBASE_API_KEY}`,
+    const body = JSON.stringify(data);
+    const req = https.request({
+      hostname,
+      path,
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': data.length }
-    };
-    const req = https.request(options, (res) => {
-      let body = '';
-      res.on('data', chunk => body += chunk);
-      res.on('end', () => { try { resolve(JSON.parse(body)); } catch(e) { resolve({ error: { message: body } }); } });
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+    }, (res) => {
+      let r = '';
+      res.on('data', c => r += c);
+      res.on('end', () => { try { resolve(JSON.parse(r)); } catch(e) { resolve({}); } });
     });
     req.on('error', reject);
-    req.write(data);
+    req.write(body);
     req.end();
   });
 }
 
-async function sendPasswordReset(email) {
-  return new Promise((resolve, reject) => {
-    const data = JSON.stringify({ requestType: 'PASSWORD_RESET', email: email });
-    const options = {
-      hostname: 'identitytoolkit.googleapis.com',
-      path: `/v1/accounts:sendOobCode?key=${FIREBASE_API_KEY}`,
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': data.length }
-    };
-    const req = https.request(options, (res) => {
-      let body = '';
-      res.on('data', chunk => body += chunk);
-      res.on('end', () => resolve(JSON.parse(body)));
-    });
-    req.on('error', reject);
-    req.write(data);
-    req.end();
-  });
-}
-
-module.exports = async (req, res) => {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+module.exports = async function handler(req, res) {
+  if (req.method !== 'POST') return res.status(405).end();
 
   const token = req.query.token || req.headers['x-kiwify-token'];
-  if (token !== KIWIFY_TOKEN) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+  if (token !== KIWIFY_TOKEN) return res.status(401).json({ error: 'Unauthorized' });
 
-  try {
-    const body = req.body;
-    const email = body?.Customer?.email || body?.customer?.email || body?.data?.customer?.email || body?.email;
-    const status = body?.order_status || body?.status || body?.data?.status;
+  const b = req.body || {};
+  const email = b.Customer?.email || b.customer?.email || b.email;
+  const status = b.order_status || b.status || '';
 
-    if (!email) return res.status(200).json({ ok: true, msg: 'Email not found' });
-    if (status && !['paid','approved','complete','completed'].includes(status.toLowerCase()))
-      return res.status(200).json({ ok: true, msg: 'Not approved' });
+  if (!email) return res.status(200).json({ ok: true, msg: 'no email' });
+  if (status && !['paid','approved','complete','completed'].includes(status.toLowerCase()))
+    return res.status(200).json({ ok: true, msg: 'not approved' });
 
-    const createResult = await createFirebaseUser(email);
-    if (createResult.error) {
-      if ((createResult.error.message || '').includes('EMAIL_EXISTS')) {
-        await sendPasswordReset(email);
-        return res.status(200).json({ ok: true, msg: 'User exists, reset sent' });
-      }
-      return res.status(500).json({ error: createResult.error });
+  const key = FIREBASE_API_KEY;
+  const created = await post('identitytoolkit.googleapis.com',
+    `/v1/accounts:signUp?key=${key}`,
+    { email, password: Math.random().toString(36).slice(-10)+'A1!', returnSecureToken: false }
+  );
+
+  if (created.error) {
+    if ((created.error.message||'').includes('EMAIL_EXISTS')) {
+      await post('identitytoolkit.googleapis.com', `/v1/accounts:sendOobCode?key=${key}`,
+        { requestType: 'PASSWORD_RESET', email });
+      return res.status(200).json({ ok: true, msg: 'reset sent' });
     }
-
-    await sendPasswordReset(email);
-    return res.status(200).json({ ok: true, email, msg: 'User created and email sent' });
-
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: created.error });
   }
+
+  await post('identitytoolkit.googleapis.com', `/v1/accounts:sendOobCode?key=${key}`,
+    { requestType: 'PASSWORD_RESET', email });
+
+  return res.status(200).json({ ok: true, email, msg: 'created and email sent' });
 };
