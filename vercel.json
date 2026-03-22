@@ -1,5 +1,9 @@
 {
-  "name": "velas-webhook",
-  "version": "1.0.0",
-  "description": "Webhook para cadastro automático de alunas"
+  "version": 2,
+  "functions": {
+    "api/kiwify.js": {
+      "memory": 128,
+      "maxDuration": 10
+    }
+  }
 }
